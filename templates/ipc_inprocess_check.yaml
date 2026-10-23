@@ -1,0 +1,22 @@
+# Biểu mẫu mẫu: Kiểm tra bán thành phẩm trong quá trình (pH, độ nhớt, cảm quan)
+code: IPC-BTP
+name: Kiểm tra bán thành phẩm (pH, độ nhớt, cảm quan)
+description: >
+  Form in sẵn ghi kết quả kiểm tra bán thành phẩm sau pha chế / trong quá trình chiết.
+  Mỗi dòng của bảng là một lần kiểm theo thời điểm.
+header_fields:
+  - {key: product_name, label: Tên sản phẩm, type: text}
+  - {key: batch_no, label: Số lô, type: text}
+  - {key: stage, label: Công đoạn, type: text}
+  - {key: check_date, label: Ngày kiểm, type: date}
+  - {key: inspector, label: Người kiểm (IPC), type: text}
+  - {key: remarks, label: Ghi chú / Nhận xét, type: text}
+table:
+  label: Kết quả kiểm tra
+  columns:
+    - {key: time, label: Giờ kiểm, type: time}
+    - {key: ph, label: pH, type: number, min: 5.0, max: 6.5}
+    - {key: viscosity, label: Độ nhớt, type: number, unit: cP, min: 8000, max: 12000}
+    - {key: temperature, label: Nhiệt độ, type: number, unit: °C, max: 35}
+    - {key: appearance, label: "Cảm quan (màu, mùi, trạng thái)", type: text}
+    - {key: result, label: Đạt/Không đạt (IPC ghi), type: text}

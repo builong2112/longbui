@@ -1,0 +1,23 @@
+# Biểu mẫu mẫu: Kiểm tra khối lượng đóng gói (IPC)
+# Sửa tên trường / giới hạn cho đúng biểu mẫu thực tế của nhà máy.
+code: IPC-WC
+name: Kiểm tra khối lượng đóng gói
+description: >
+  Form in sẵn. Phần đầu có thông tin sản phẩm, số lô, line, ngày giờ.
+  Phần dưới là bảng ghi khối lượng tịnh từng mẫu (thường 10 mẫu/lần kiểm),
+  có cột thời điểm lấy mẫu và chữ ký người kiểm.
+header_fields:
+  - {key: product_name, label: Tên sản phẩm, type: text}
+  - {key: batch_no, label: Số lô, type: text}
+  - {key: line, label: Line / Máy chiết, type: text}
+  - {key: check_date, label: Ngày kiểm, type: date}
+  - {key: nominal_weight, label: Khối lượng danh nghĩa, type: number, unit: g}
+  - {key: inspector, label: Người kiểm (IPC), type: text}
+  - {key: remarks, label: Ghi chú / Nhận xét, type: text}
+table:
+  label: Kết quả cân
+  columns:
+    - {key: time, label: Giờ lấy mẫu, type: time}
+    - {key: sample_no, label: Mẫu số, type: number}
+    - {key: net_weight, label: Khối lượng tịnh, type: number, unit: g, min: 49.0, max: 51.5}
+    - {key: result, label: Đạt/Không đạt (IPC ghi), type: text}
