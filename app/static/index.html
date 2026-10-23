@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IPC Scan</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <h1>IPC Scan</h1>
+  <div class="user" id="user"></div>
+</header>
+<main>
+  <!-- Đăng nhập -->
+  <section class="card hidden" id="login-card" style="max-width:380px;margin:40px auto">
+    <h2>Đăng nhập</h2>
+    <form id="login-form">
+      <label for="login-name">Tên đăng nhập</label>
+      <input id="login-name" autocomplete="username" required>
+      <label for="login-pin" style="margin-top:10px">PIN</label>
+      <input id="login-pin" type="password" inputmode="numeric" autocomplete="current-password" required>
+      <div id="login-msg" class="hidden"></div>
+      <button class="primary" style="width:100%;margin-top:14px">Đăng nhập</button>
+    </form>
+  </section>
+
+  <div id="app" class="hidden">
+    <!-- Upload -->
+    <section class="card">
+      <h2>Tải biểu mẫu lên</h2>
+      <div class="row">
+        <div>
+          <label for="tpl">Loại biểu mẫu</label>
+          <select id="tpl"><option value="auto">Tự nhận diện</option></select>
+        </div>
+        <label class="btn primary" for="camera">📷 Chụp ảnh</label>
+        <label class="btn" for="files">📁 Chọn ảnh / PDF</label>
+      </div>
+      <input id="camera" type="file" accept="image/*" capture="environment" class="hidden">
+      <input id="files" type="file" accept="image/*,.pdf,application/pdf" multiple class="hidden">
+      <p class="muted">Chụp thẳng, đủ sáng, thấy hết 4 góc biểu mẫu. PDF nhiều trang sẽ được tách mỗi trang thành 1 bản ghi.</p>
+      <div id="upload-msg" class="hidden"></div>
+    </section>
+
+    <!-- Danh sách -->
+    <section class="card">
+      <h2>Danh sách bản ghi</h2>
+      <div class="tabs" id="tabs">
+        <button data-status="pending_review" class="active">Chờ duyệt</button>
+        <button data-status="processing">Đang xử lý</button>
+        <button data-status="approved">Đã duyệt</button>
+        <button data-status="error">Lỗi</button>
+        <button data-status="rejected">Từ chối</button>
+        <button data-status="">Tất cả</button>
+      </div>
+      <div class="row" style="margin-bottom:10px">
+        <div><input id="q" placeholder="Tìm số lô, sản phẩm…"></div>
+        <div><select id="filter-tpl"><option value="">Tất cả biểu mẫu</option></select></div>
+      </div>
+      <table class="doc-list">
+        <thead><tr><th>#</th><th>Trạng thái</th><th>Biểu mẫu</th><th>Sản phẩm / Số lô</th><th>Kết luận</th><th>Upload</th></tr></thead>
+        <tbody id="docs"></tbody>
+      </table>
+      <p class="muted hidden" id="empty">Không có bản ghi.</p>
+    </section>
+
+    <!-- Xuất dữ liệu -->
+    <section class="card">
+      <h2>Xuất dữ liệu đã duyệt</h2>
+      <div class="row">
+        <div><label for="ex-tpl">Biểu mẫu</label><select id="ex-tpl"></select></div>
+        <div><label for="ex-from">Từ ngày</label><input id="ex-from" type="date"></div>
+        <div><label for="ex-to">Đến ngày</label><input id="ex-to" type="date"></div>
+        <button id="ex-xlsx" class="primary">Excel</button>
+        <button id="ex-csv">CSV</button>
+      </div>
+      <p class="muted">Excel gồm 2 sheet "Header" và "Chi tiet" – có thể import thẳng vào Lark Base.</p>
+    </section>
+  </div>
+</main>
+<script src="common.js"></script>
+<script>
+let status = "pending_review";
+let pollTimer = null;
+
+async function init() {
+  const me = await renderUser(document.getElementById("user"));
+  if (!me) {
+    document.getElementById("login-card").classList.remove("hidden");
+    return;
+  }
+  document.getElementById("app").classList.remove("hidden");
+  const templates = await api("/api/templates");
+  for (const id of ["tpl", "filter-tpl", "ex-tpl"]) {
+    const sel = document.getElementById(id);
+    for (const t of templates) sel.add(new Option(`${t.code} – ${t.name}`, t.code));
+  }
+  loadDocs();
+}
+
+document.getElementById("login-form").onsubmit = async (e) => {
+  e.preventDefault();
+  try {
+    await api("/api/login", {
+      method: "POST",
+      body: { name: document.getElementById("login-name").value, pin: document.getElementById("login-pin").value },
+    });
+    location.reload();
+  } catch (err) {
+    showMsg(document.getElementById("login-msg"), err.message);
+  }
+};
+
+async function upload(fileList) {
+  if (!fileList.length) return;
+  const msg = document.getElementById("upload-msg");
+  showMsg(msg, `Đang tải lên ${fileList.length} file…`, "ok");
+  const fd = new FormData();
+  for (const f of fileList) fd.append("files", f);
+  fd.append("template_code", document.getElementById("tpl").value);
+  try {
+    const res = await api("/api/upload", { method: "POST", body: fd });
+    let text = `Đã nhận ${res.document_ids.length} trang. AI đang đọc, kết quả sẽ hiện ở tab "Chờ duyệt".`;
+    if (res.errors.length) text += " Lỗi: " + res.errors.join("; ");
+    showMsg(msg, text, res.errors.length ? "error" : "ok");
+    hadProcessing = true;
+    selectTab("processing");
+  } catch (err) {
+    showMsg(msg, err.message);
+  }
+}
+for (const id of ["camera", "files"]) {
+  const input = document.getElementById(id);
+  input.onchange = () => { upload([...input.files]); input.value = ""; };
+}
+
+function selectTab(s) {
+  status = s;
+  for (const b of document.querySelectorAll("#tabs button")) b.classList.toggle("active", b.dataset.status === s);
+  loadDocs();
+}
+document.getElementById("tabs").onclick = (e) => { if (e.target.dataset.status !== undefined) selectTab(e.target.dataset.status); };
+let qTimer;
+document.getElementById("q").oninput = () => { clearTimeout(qTimer); qTimer = setTimeout(loadDocs, 300); };
+document.getElementById("filter-tpl").onchange = loadDocs;
+
+async function loadDocs() {
+  clearTimeout(pollTimer);
+  const params = new URLSearchParams({
+    status, q: document.getElementById("q").value, template_code: document.getElementById("filter-tpl").value,
+  });
+  const docs = await api("/api/documents?" + params);
+  const tbody = document.getElementById("docs");
+  tbody.innerHTML = docs.map((d) => `
+    <tr class="clickable" data-id="${d.id}">
+      <td>${d.id}</td>
+      <td>${badge(d.status)}${d.low_confidence ? `<div class="muted">${d.low_confidence} ô cần kiểm tra</div>` : ""}${d.error ? `<div class="muted">${esc(d.error)}</div>` : ""}</td>
+      <td>${esc(d.template_code || "…")}</td>
+      <td>${esc(d.product_name)}<div class="muted">${esc(d.batch_no)}</div></td>
+      <td>${d.overall && d.overall !== "n/a" ? badge(d.overall, OVERALL_VI[d.overall]) : ""}</td>
+      <td class="muted">${esc(d.original_name)} (tr.${d.page_no})<br>${esc(d.uploaded_by)} · ${fmtTime(d.uploaded_at)}</td>
+    </tr>`).join("");
+  document.getElementById("empty").classList.toggle("hidden", docs.length > 0);
+  for (const tr of tbody.querySelectorAll("tr")) tr.onclick = () => (location.href = `review.html?id=${tr.dataset.id}`);
+  if (docs.some((d) => d.status === "processing")) pollTimer = setTimeout(loadDocs, 4000);
+  // AI finished everything we were waiting for -> jump to the review queue.
+  if (status === "processing" && !docs.length && hadProcessing) selectTab("pending_review");
+  hadProcessing = status === "processing" && docs.length > 0;
+}
+let hadProcessing = false;
+
+function exportData(format) {
+  const params = new URLSearchParams({
+    template_code: document.getElementById("ex-tpl").value, format,
+    date_from: document.getElementById("ex-from").value, date_to: document.getElementById("ex-to").value,
+  });
+  location.href = "/api/export?" + params;
+}
+document.getElementById("ex-xlsx").onclick = () => exportData("xlsx");
+document.getElementById("ex-csv").onclick = () => exportData("csv");
+
+init();
+</script>
+</body>
+</html>

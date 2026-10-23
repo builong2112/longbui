@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Duyệt bản ghi IPC</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <h1><a href="index.html" style="text-decoration:none">← IPC Scan</a></h1>
+  <div class="user" id="user"></div>
+</header>
+<main>
+  <div id="msg" class="hidden"></div>
+  <div class="review">
+    <section class="card viewer">
+      <div class="row" style="margin-bottom:8px;align-items:center">
+        <div class="muted" id="file-info"></div>
+        <button id="zoom-out" title="Thu nhỏ">−</button>
+        <button id="zoom-in" title="Phóng to">+</button>
+        <a class="btn" id="original" target="_blank">File gốc</a>
+      </div>
+      <div class="frame"><img id="img" alt="Ảnh biểu mẫu"></div>
+    </section>
+
+    <section>
+      <div class="card">
+        <div class="row" style="align-items:center;margin-bottom:8px">
+          <h2 style="margin:0" id="title">Đang tải…</h2>
+          <div id="status" style="flex:0 0 auto"></div>
+        </div>
+        <div id="state-note" class="muted"></div>
+        <div id="processing" class="hidden">
+          <p>AI đang đọc biểu mẫu… trang sẽ tự cập nhật.</p>
+        </div>
+        <div id="retry-box" class="hidden row" style="margin-top:10px">
+          <div>
+            <label for="retry-tpl">Chạy lại AI với biểu mẫu</label>
+            <select id="retry-tpl"><option value="">(giữ nguyên / tự nhận diện)</option></select>
+          </div>
+          <button id="retry">Chạy lại AI</button>
+        </div>
+      </div>
+
+      <form id="form" class="hidden">
+        <div class="card">
+          <div class="legend">
+            <span class="l-warn">AI đọc không chắc chắn – kiểm tra kỹ</span>
+            <span class="l-fail">Ngoài tiêu chuẩn</span>
+            <span class="l-pass">Trong tiêu chuẩn</span>
+          </div>
+          <h2>Thông tin chung</h2>
+          <div class="fields" id="header-fields"></div>
+        </div>
+        <div class="card">
+          <div class="row" style="align-items:center;margin-bottom:8px">
+            <h2 style="margin:0" id="table-label">Kết quả</h2>
+            <div id="overall" style="flex:0 0 auto"></div>
+          </div>
+          <div class="table-wrap"><table class="grid" id="grid"></table></div>
+          <button type="button" id="add-row" style="margin-top:8px">+ Thêm dòng</button>
+        </div>
+        <div class="card">
+          <label for="notes">Ghi chú (AI ghi lại chỗ gạch xóa, khó đọc…)</label>
+          <textarea id="notes"></textarea>
+          <div id="reason-box" class="hidden" style="margin-top:10px">
+            <label for="reason">Lý do sửa (bắt buộc với bản ghi đã duyệt)</label>
+            <input id="reason">
+          </div>
+          <div class="actions">
+            <button type="button" id="save">Lưu</button>
+            <button type="button" id="approve" class="primary">Lưu & Duyệt</button>
+            <button type="button" id="reject" class="danger">Từ chối / Chụp lại</button>
+          </div>
+        </div>
+      </form>
+
+      <details class="card history">
+        <summary>Lịch sử (audit trail)</summary>
+        <ul id="history"></ul>
+      </details>
+    </section>
+  </div>
+</main>
+<script src="common.js"></script>
+<script>
+const id = new URLSearchParams(location.search).get("id");
+let doc, tpl, data, zoom = 1, dirty = false;
+
+function toNumber(v) {
+  const m = String(v ?? "").match(/-?\d+(?:[.,]\d+)?/);
+  return m ? parseFloat(m[0].replace(",", ".")) : null;
+}
+function check(f, v) {
+  if (f.type !== "number" || (f.min == null && f.max == null) || v === "" || v == null) return null;
+  const n = toNumber(v);
+  if (n == null) return "fail";
+  return (f.min != null && n < f.min) || (f.max != null && n > f.max) ? "fail" : "pass";
+}
+function limitText(f) {
+  const u = f.unit ? ` ${f.unit}` : "";
+  if (f.min != null && f.max != null) return `${f.min} – ${f.max}${u}`;
+  if (f.min != null) return `≥ ${f.min}${u}`;
+  if (f.max != null) return `≤ ${f.max}${u}`;
+  return f.unit || "";
+}
+function cellClass(f, cell) {
+  const s = check(f, cell.value);
+  if (s) return `cell-${s}`;
+  return cell.confidence === "low" || cell.confidence === "medium" ? `cell-${cell.confidence}` : "";
+}
+function inputFor(f, cell, path) {
+  const title = cell.confidence === "low" || cell.confidence === "medium" ? `AI đọc: độ tin cậy ${cell.confidence === "low" ? "thấp" : "trung bình"}` : "";
+  return `<input data-path="${path}" value="${esc(cell.value)}" class="${cellClass(f, cell)}" title="${title}"
+    ${f.type === "number" ? 'inputmode="decimal"' : ""}>`;
+}
+
+async function load() {
+  doc = await api(`/api/documents/${id}`);
+  tpl = doc.template;
+  document.getElementById("title").textContent = tpl ? `${tpl.code} – ${tpl.name}` : `Bản ghi #${doc.id}`;
+  document.getElementById("status").innerHTML = badge(doc.status);
+  document.getElementById("file-info").textContent = `#${doc.id} · ${doc.original_name} · trang ${doc.page_no}`;
+  document.getElementById("img").src = `/api/documents/${id}/image`;
+  document.getElementById("original").href = `/api/documents/${id}/original`;
+  const note = [];
+  if (doc.error) note.push("Lỗi: " + doc.error);
+  if (doc.reviewed_by) note.push(`${STATUS_VI[doc.status]} bởi ${doc.reviewed_by} lúc ${fmtTime(doc.reviewed_at)}${doc.review_note ? " – " + doc.review_note : ""}`);
+  document.getElementById("state-note").textContent = note.join(" · ");
+
+  const processing = doc.status === "processing";
+  document.getElementById("processing").classList.toggle("hidden", !processing);
+  const noEdits = !doc.history.edits.length;
+  document.getElementById("retry-box").classList.toggle("hidden", !(doc.status === "error" || (doc.status === "pending_review" && noEdits)));
+  renderHistory();
+  if (processing) { setTimeout(load, 3000); return; }
+  if (!doc.data || !tpl) return;
+
+  data = structuredClone(doc.data);
+  const editable = doc.status === "pending_review" || doc.status === "approved";
+  document.getElementById("form").classList.remove("hidden");
+  document.getElementById("reason-box").classList.toggle("hidden", doc.status !== "approved");
+  for (const b of ["approve", "reject"]) document.getElementById(b).classList.toggle("hidden", doc.status !== "pending_review");
+  document.getElementById("save").classList.toggle("hidden", !editable);
+  document.getElementById("add-row").classList.toggle("hidden", !editable);
+  renderForm();
+  for (const el of document.querySelectorAll("#form input, #form textarea")) el.disabled = !editable;
+}
+
+function renderForm() {
+  document.getElementById("header-fields").innerHTML = tpl.header_fields.map((f) => `
+    <div><label>${esc(f.label)} <span class="limit">${esc(limitText(f))}</span></label>
+    ${inputFor(f, data.header[f.key] || { value: "" }, `header.${f.key}`)}</div>`).join("");
+  document.getElementById("table-label").textContent = tpl.table.label || "Kết quả";
+  const cols = tpl.table.columns;
+  document.getElementById("grid").innerHTML =
+    `<tr><th></th>${cols.map((c) => `<th>${esc(c.label)}<div class="limit">${esc(limitText(c))}</div></th>`).join("")}<th></th></tr>` +
+    data.rows.map((r, i) => `<tr><td class="idx">${i + 1}</td>${cols.map((c) =>
+      `<td>${inputFor(c, r[c.key] || { value: "" }, `rows.${i}.${c.key}`)}</td>`).join("")}
+      <td><button type="button" data-del="${i}" title="Xóa dòng">✕</button></td></tr>`).join("");
+  document.getElementById("notes").value = data.notes || "";
+  renderOverall();
+}
+
+function renderOverall() {
+  const all = [...tpl.header_fields.map((f) => check(f, data.header[f.key]?.value)),
+    ...data.rows.flatMap((r) => tpl.table.columns.map((c) => check(c, r[c.key]?.value)))].filter(Boolean);
+  const overall = !all.length ? "" : all.includes("fail") ? "fail" : "pass";
+  document.getElementById("overall").innerHTML = overall ? badge(overall, OVERALL_VI[overall]) : "";
+}
+
+document.getElementById("form").addEventListener("input", (e) => {
+  const path = e.target.dataset.path;
+  if (e.target.id === "notes") { data.notes = e.target.value; dirty = true; return; }
+  if (!path) return;
+  const parts = path.split(".");
+  const f = parts[0] === "header" ? tpl.header_fields.find((x) => x.key === parts[1]) : tpl.table.columns.find((x) => x.key === parts[2]);
+  const target = parts[0] === "header" ? data.header : data.rows[+parts[1]];
+  const key = parts[0] === "header" ? parts[1] : parts[2];
+  target[key] = { value: e.target.value, confidence: "verified" };
+  e.target.className = cellClass(f, target[key]);
+  e.target.title = "";
+  dirty = true;
+  renderOverall();
+});
+document.getElementById("grid").addEventListener("click", (e) => {
+  if (e.target.dataset.del === undefined) return;
+  data.rows.splice(+e.target.dataset.del, 1);
+  dirty = true;
+  renderForm();
+});
+document.getElementById("add-row").onclick = () => {
+  data.rows.push(Object.fromEntries(tpl.table.columns.map((c) => [c.key, { value: "", confidence: "verified" }])));
+  dirty = true;
+  renderForm();
+};
+
+async function save() {
+  const res = await api(`/api/documents/${id}/data`, {
+    method: "PUT", body: { data, reason: document.getElementById("reason").value || null },
+  });
+  dirty = false;
+  return res;
+}
+function fail(err) { showMsg(document.getElementById("msg"), err.message); scrollTo(0, 0); }
+
+document.getElementById("save").onclick = async () => {
+  try {
+    const res = await save();
+    showMsg(document.getElementById("msg"), res.changed ? `Đã lưu ${res.changed} thay đổi.` : "Không có thay đổi.", "ok");
+    load();
+  } catch (err) { fail(err); }
+};
+document.getElementById("approve").onclick = async () => {
+  const low = document.querySelectorAll("#form .cell-low, #form .cell-medium").length;
+  if (low && !confirm(`Còn ${low} ô AI đọc không chắc chắn (tô vàng). Bạn đã đối chiếu với ảnh gốc và xác nhận đúng?`)) return;
+  try {
+    await save();
+    await api(`/api/documents/${id}/approve`, { method: "POST", body: {} });
+    location.href = "index.html";
+  } catch (err) { fail(err); }
+};
+document.getElementById("reject").onclick = async () => {
+  const note = prompt("Lý do từ chối (ví dụ: ảnh mờ, chụp thiếu, sai biểu mẫu):");
+  if (!note) return;
+  try {
+    await api(`/api/documents/${id}/reject`, { method: "POST", body: { note } });
+    location.href = "index.html";
+  } catch (err) { fail(err); }
+};
+document.getElementById("retry").onclick = async () => {
+  try {
+    await api(`/api/documents/${id}/retry`, { method: "POST", body: { template_code: document.getElementById("retry-tpl").value || null } });
+    document.getElementById("form").classList.add("hidden");
+    load();
+  } catch (err) { fail(err); }
+};
+
+function setZoom(z) {
+  zoom = Math.min(4, Math.max(1, z));
+  document.getElementById("img").style.width = `${zoom * 100}%`;
+}
+document.getElementById("zoom-in").onclick = () => setZoom(zoom + 0.5);
+document.getElementById("zoom-out").onclick = () => setZoom(zoom - 0.5);
+
+const ACTION_VI = { uploaded: "Upload", extracted: "AI trích xuất", edited: "Sửa", reopened: "Sửa sau duyệt", approved: "Duyệt", rejected: "Từ chối" };
+function renderHistory() {
+  // Field edits share the timestamp of their "edited"/"reopened" event; list them under it.
+  const editLine = (e) => `<li class="muted">${esc(e.field_path)}: "${esc(e.old_value)}" → "${esc(e.new_value)}"</li>`;
+  document.getElementById("history").innerHTML = doc.history.events.map((e) => {
+    const edits = ["edited", "reopened"].includes(e.action) ? doc.history.edits.filter((x) => x.edited_at === e.at) : [];
+    return `<li>${fmtTime(e.at)} · <b>${ACTION_VI[e.action] || e.action}</b> – ${esc(e.actor)}${e.detail ? ": " + esc(e.detail) : ""}
+      ${edits.length ? `<ul>${edits.map(editLine).join("")}</ul>` : ""}</li>`;
+  }).join("");
+}
+
+window.addEventListener("beforeunload", (e) => { if (dirty) e.preventDefault(); });
+
+(async () => {
+  await renderUser(document.getElementById("user"));
+  const templates = await api("/api/templates");
+  const sel = document.getElementById("retry-tpl");
+  for (const t of templates) sel.add(new Option(`${t.code} – ${t.name}`, t.code));
+  load().catch(fail);
+})();
+</script>
+</body>
+</html>

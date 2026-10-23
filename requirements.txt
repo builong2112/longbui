@@ -1,0 +1,9 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9
+itsdangerous>=2.2
+anthropic>=2.2
+pymupdf>=1.24
+pillow>=10.4
+pyyaml>=6.0
+openpyxl>=3.1
